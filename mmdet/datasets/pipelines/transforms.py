@@ -3,11 +3,14 @@ import copy
 import inspect
 import math
 import warnings
+import matplotlib.pyplot as plt
 
 import cv2
 import mmcv
 import numpy as np
 from numpy import random
+from PIL import Image
+import PIL.ImageDraw as ImageDraw
 
 from mmdet.core import BitmapMasks, PolygonMasks, find_inside_bboxes
 from mmdet.core.evaluation.bbox_overlaps import bbox_overlaps
@@ -26,6 +29,25 @@ except ImportError:
     albumentations = None
     Compose = None
 
+def show_image(img):
+    plt.figure(figsize=(15, 10))
+    plt.imshow(mmcv.bgr2rgb(img))
+    plt.show()
+    
+def save_masks(img, polygons, bboxes, name='poly'):
+    image = Image.fromarray(img, mode='RGB') # IMAGE SHOULD BE BGR
+    draw = ImageDraw.Draw(image)
+    
+    for poly in polygons:    
+        poly = np.array(poly[0])
+        poly = poly.reshape(-1, 2)
+        poly = [(pt[0], pt[1]) for pt in poly]
+        draw.polygon((poly), fill=200)
+    
+    for box in bboxes:        
+        draw.rectangle((list(box)), outline=125, width=2)
+        
+    image.save(name+'.jpg')
 
 @PIPELINES.register_module()
 class Resize:

@@ -392,18 +392,27 @@ class MMDetWandbHook(WandbLoggerHook):
             # TODO: Panoramic segmentation visualization.
 
             # Log a row to the data table.
-            self.data_table.add_data(
-                image_name,
-                self.wandb.Image(
+            image = self.wandb.Image(
                     image,
                     boxes=wandb_boxes,
                     masks=wandb_masks,
-                    classes=self.class_set))
+                    classes=self.class_set)
+            # self.wandb.log({f"ground_truth{idx}": image})
+            
+            self.data_table.add_data(image_name, image)
 
     def _log_predictions(self, results):
         table_idxs = self.data_table_ref.get_index()
-        assert len(table_idxs) == len(self.eval_image_indexs)
-
+        assert len(table_idxs) == len(self.eval_image_indexs) 
+               
+        from mmdet.datasets.pipelines import LoadImageFromFile
+        img_loader = None
+        for t in self.val_dataset.pipeline.transforms:
+            if isinstance(t, LoadImageFromFile):
+                img_loader = t
+        
+        images = []
+        
         for ndx, eval_image_index in enumerate(self.eval_image_indexs):
             # Get the result
             result = results[eval_image_index]
@@ -446,19 +455,59 @@ class MMDetWandbHook(WandbLoggerHook):
             wandb_boxes = self._get_wandb_bboxes(bboxes, labels, log_gt=False)
             # Get dict of masks to be logged.
             if segms is not None:
-                wandb_masks = self._get_wandb_masks(segms, labels)
+                wandb_masks = self._get_wandb_masks(segms, labels, prefix="pred_")
             else:
                 wandb_masks = None
+            
+            # ground truth
+            # img_info = self.val_dataset.data_infos[eval_image_index]
+            # image_name = img_info.get('filename', f'img_{eval_image_index}')
+            # img_height, img_width = img_info['height'], img_info['width']
+                        
+            # img_meta = img_loader(dict(img_info=img_info, img_prefix=self.val_dataset.img_prefix))
 
-            # Log a row to the eval table.
-            self.eval_table.add_data(
-                self.data_table_ref.data[ndx][0],
-                self.data_table_ref.data[ndx][1],
-                self.wandb.Image(
+            # # Get image and convert from BGR to RGB
+            # image = mmcv.bgr2rgb(img_meta['img'])
+
+            # data_ann = self.val_dataset.get_ann_info(eval_image_index)
+            # truebboxes = data_ann['bboxes']
+            # truelabels = data_ann['labels']
+            # truemasks = data_ann.get('masks', None)        
+
+            # true_wandb_boxes = self._get_wandb_bboxes(truebboxes, truelabels)
+            # true_wandb_masks = self._get_wandb_masks(
+            #     truemasks,
+            #     truelabels,
+            #     is_poly_mask=True,
+            #     height=img_height,
+            #     width=img_width,
+            #     prefix="true_")
+            
+            # wandb_masks.update(true_wandb_masks)
+            # wandb_boxes.update(true_wandb_boxes)
+
+            image = self.wandb.Image(
                     self.data_table_ref.data[ndx][1],
                     boxes=wandb_boxes,
                     masks=wandb_masks,
-                    classes=self.class_set))
+                    classes=self.class_set,
+                    caption=osp.basename(self.data_table_ref.data[ndx][0])
+            )
+            images.append(image)
+            
+            # self.wandb.log({})            
+            # Log a row to the eval table.
+            # self.eval_table.add_data(
+            #     self.data_table_ref.data[ndx][0],
+            #     self.data_table_ref.data[ndx][1],
+            #     self.wandb.Image(
+            #         self.data_table_ref.data[ndx][1],
+            #         boxes=wandb_boxes,
+            #         masks=wandb_masks,
+            #         classes=self.class_set))
+            
+        self.wandb.log({f"examples": images})
+        
 
     def _get_wandb_bboxes(self, bboxes, labels, log_gt=True):
         """Get list of structured dict for logging bounding boxes to W&B.
@@ -517,7 +566,8 @@ class MMDetWandbHook(WandbLoggerHook):
                          labels,
                          is_poly_mask=False,
                          height=None,
-                         width=None):
+                         width=None,
+                         prefix=""):
         """Get list of structured dict for logging masks to W&B.
 
         Args:
@@ -552,7 +602,7 @@ class MMDetWandbHook(WandbLoggerHook):
             value[value > 0] = key
 
             # Create dict of masks for logging.
-            class_name = self.class_id_to_label[key]
+            class_name = prefix + self.class_id_to_label[key]
             wandb_masks[class_name] = {
                 'mask_data': value,
                 'class_labels': self.class_id_to_label
@@ -569,11 +619,13 @@ class MMDetWandbHook(WandbLoggerHook):
         """
         data_artifact = self.wandb.Artifact('val', type='dataset')
         data_artifact.add(self.data_table, 'val_data')
+        self.wandb.log_artifact(data_artifact)
+        data_artifact.wait()
 
         if not self.wandb.run.offline:
-            self.wandb.run.use_artifact(data_artifact)
-            data_artifact.wait()
-            self.data_table_ref = data_artifact.get('val_data')
+            # self.wandb.run.use_artifact(data_artifact)            
+            # data_artifact.wait()
+            self.data_table_ref = self.wandb.use_artifact('val:latest').get("val_data")
         else:
             self.data_table_ref = self.data_table
 
@@ -584,7 +636,7 @@ class MMDetWandbHook(WandbLoggerHook):
         to compare models at different intervals interactively.
         """
         pred_artifact = self.wandb.Artifact(
-            f'run_{self.wandb.run.id}_pred', type='evaluation')
+            f'run_{self.wandb.run.id}_pred', type='predictions')
         pred_artifact.add(self.eval_table, 'eval_data')
         if self.by_epoch:
             aliases = ['latest', f'epoch_{idx}']
